@@ -1,4 +1,4 @@
-# Emitter [![godoc](http://img.shields.io/badge/godoc-reference-blue.svg?style=flat)](https://godoc.org/github.com/olebedev/emitter)
+# Emitter [![godoc](http://img.shields.io/badge/godoc-reference-blue.svg?style=flat)](https://godoc.org/github.com/ArthurHlt/emitter)
 
 The emitter package implements a channel-based pubsub pattern. The design goals are to use Golang concurrency model 
 instead of flat callbacks and to design a very simple API that is easy to consume.
