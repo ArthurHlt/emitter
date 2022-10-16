@@ -12,10 +12,7 @@ Groups have been removed as they are not used in this project.
 - [sync/async event emitting](#flags)
 - [predicates/middlewares](#middlewares)
 - [bi-directional wildcard](#wildcard)
-- [discard emitting if needed](#cancellation)
-- [merge events from different channels](#groups)
-- [shallow on demand type casting](#event)
-- [work with callbacks(traditional way)](#callbacks-only-usage)
+- [custom event](#event)
 
 
 ## Brief example
@@ -154,6 +151,3 @@ You can provide your own event implementation by implementing the `Event` interf
 By default you have 2 implementations:
 - `emitter.BasicEvent` - a simple event implementation created with `emitter.NewEvent`
 - `emitter.EventOf` - a generic event implementation created with `emitter.NewEventOf`
-
-## License
-MIT
