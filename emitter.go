@@ -53,7 +53,6 @@ func New(capacity uint) *Emitter {
 type Emitter struct {
 	Cap         uint
 	listMans    *sync.Map // sync.Map(string, sync.Map(string ptr addr, *listenerManager)
-	isInit      bool
 	middlewares *sync.Map // sync.Map(string, []func(Event))
 }
 
@@ -72,7 +71,6 @@ func (e *Emitter) On(topic string, listener Listener, middlewares ...func(Event)
 	l := newListenerManager(e.Cap, listener, middlewares...)
 	rawMan, _ := e.listMans.LoadOrStore(topic, &sync.Map{})
 	rawMan.(*sync.Map).Store(fmt.Sprintf("%p", listener), l)
-	return
 }
 
 // Once works exactly like On(see above) but with `Once` as the first middleware.
@@ -180,7 +178,6 @@ func (e *Emitter) Emit(event Event) chan struct{} {
 	}
 	if haveToWait {
 		go func(done chan struct{}) {
-			defer func() { recover() }()
 			wg.Wait()
 			close(done)
 		}(done)
@@ -267,14 +264,12 @@ func dropAll(smListeners *sync.Map) {
 		smListeners.Delete(key)
 		return true
 	})
-	return
 }
 
 func dropMany(smListeners *sync.Map, listeners ...Listener) {
 	for _, l := range listeners {
 		drop(smListeners, l)
 	}
-	return
 }
 
 func drop(smListeners *sync.Map, listener Listener) {
@@ -286,7 +281,6 @@ func drop(smListeners *sync.Map, listener Listener) {
 	listMan := lmRaw.(*listenerManager)
 	close(listMan.ch)
 	smListeners.Delete(ptrAddr)
-	return
 }
 
 func send(
