@@ -1,18 +1,18 @@
 package emitter
 
 type Listener interface {
-	Handle(Event)
+	Observe(Event)
 }
 
 type ListenerFunc func(Event)
 
-func (fn ListenerFunc) Handle(e Event) {
+func (fn ListenerFunc) Observe(e Event) {
 	fn(e)
 }
 
 type ListenerFuncOf[T any] func(*EventOf[T])
 
-func (fn ListenerFuncOf[T]) Handle(e Event) {
+func (fn ListenerFuncOf[T]) Observe(e Event) {
 	typedEvent, ok := e.(*EventOf[T])
 	if !ok {
 		return
@@ -40,6 +40,6 @@ func newListenerManager(capacity uint, listener Listener, middlewares ...func(Ev
 
 func (lm *listenerManager) observe() {
 	for e := range lm.ch {
-		lm.listener.Handle(e)
+		lm.listener.Observe(e)
 	}
 }
