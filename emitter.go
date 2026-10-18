@@ -84,7 +84,7 @@ func (e *Emitter) Off(topic string, listeners ...Listener) {
 	match, _ := e.matched(topic)
 
 	for _, _topic := range match {
-		e.listMans.Range(func(topicRaw, smRaw interface{}) bool {
+		e.listMans.Range(func(topicRaw, smRaw any) bool {
 			if topicRaw.(string) != _topic {
 				return true
 			}
@@ -94,12 +94,7 @@ func (e *Emitter) Off(topic string, listeners ...Listener) {
 				return true
 			}
 			dropMany(smRaw.(*sync.Map), listeners...)
-			shouldRemove := true
-			smRaw.(*sync.Map).Range(func(_, _ interface{}) bool {
-				shouldRemove = false
-				return false
-			})
-			if shouldRemove {
+			if isEmptySyncMap(smRaw.(*sync.Map)) {
 				e.listMans.Delete(topicRaw)
 			}
 			return true
@@ -115,11 +110,11 @@ func (e *Emitter) Listeners(topic string) []Listener {
 	listeners := make([]Listener, 0)
 
 	for _, _topic := range match {
-		e.listMans.Range(func(topicRaw, smRaw interface{}) bool {
+		e.listMans.Range(func(topicRaw, smRaw any) bool {
 			if topicRaw.(string) != _topic {
 				return true
 			}
-			smRaw.(*sync.Map).Range(func(_, lRaw interface{}) bool {
+			smRaw.(*sync.Map).Range(func(_, lRaw any) bool {
 				listeners = append(listeners, lRaw.(*listenerManager).listener)
 				return true
 			})
@@ -133,7 +128,7 @@ func (e *Emitter) Listeners(topic string) []Listener {
 // Topics returns all existing topics.
 func (e *Emitter) Topics() []string {
 	acc := make([]string, 0)
-	e.listMans.Range(func(topicRaw, _ interface{}) bool {
+	e.listMans.Range(func(topicRaw, _ any) bool {
 		acc = append(acc, topicRaw.(string))
 		return true
 	})
@@ -151,26 +146,39 @@ func (e *Emitter) Emit(event Event) chan struct{} {
 	var haveToWait bool
 	for _, _topic := range match {
 		applyMiddlewares(event, e.getMiddlewares(_topic))
-		e.listMans.Range(func(topicRaw, smRaw interface{}) bool {
+		e.listMans.Range(func(topicRaw, smRaw any) bool {
 			if topicRaw.(string) != _topic {
 				return true
 			}
-			smRaw.(*sync.Map).Range(func(_, lRaw interface{}) bool {
+			smListeners := smRaw.(*sync.Map)
+			smListeners.Range(func(key, lRaw any) bool {
 				listMan := lRaw.(*listenerManager)
 				evn := event.Clone()
 				applyMiddlewares(evn, listMan.middlewares)
-				if (evn.Flag() | FlagVoid) == evn.Flag() {
+				if evn.Flag()&FlagVoid != 0 {
+					return true
+				}
+				isOnce := evn.Flag()&FlagOnce != 0
+				isSkip := evn.Flag()&FlagSkip != 0
+				// Claim synchronously so the next Emit can't reach this listener too.
+				if isOnce && !listMan.onceClaimed.CompareAndSwap(false, true) {
 					return true
 				}
 				wg.Add(1)
 				haveToWait = true
-				go func(lm *listenerManager, event Event) {
-					_, remove, _ := pushEvent(done, lm.ch, event)
-					if remove {
-						defer e.Off(event.Topic(), lm.listener)
+				go func() {
+					// Deferred so the listener is removed before done is closed.
+					defer wg.Done()
+					sent := listMan.send(evn, !isSkip)
+					if !isOnce {
+						return
 					}
-					wg.Done()
-				}(listMan, evn)
+					if !sent {
+						listMan.onceClaimed.Store(false)
+						return
+					}
+					e.remove(topicRaw.(string), smListeners, key, listMan)
+				}()
 				return true
 			})
 			return true
@@ -187,36 +195,19 @@ func (e *Emitter) Emit(event Event) chan struct{} {
 	return done
 }
 
-func pushEvent(
-	done chan struct{},
-	lstnr chan Event,
-	event Event,
-) (success, remove bool, err error) {
-	// unwind the flags
-	isOnce := (event.Flag() | FlagOnce) == event.Flag()
-	isSkip := (event.Flag() | FlagSkip) == event.Flag()
-
-	sent, canceled := send(
-		done,
-		lstnr,
-		event,
-		!isSkip,
-	)
-	success = sent
-
-	if !sent && !canceled {
-		remove = false
-		// if not sent
-	} else if !canceled {
-		// if event was sent successfully
-		remove = isOnce
+// remove, unlike Off, leaves alone a listener re-registered under the same key.
+func (e *Emitter) remove(topic string, smListeners *sync.Map, key any, listMan *listenerManager) {
+	if smListeners.CompareAndDelete(key, listMan) {
+		listMan.stop()
 	}
-	return
+	if isEmptySyncMap(smListeners) {
+		e.listMans.CompareAndDelete(topic, smListeners)
+	}
 }
 
 func (e *Emitter) getMiddlewares(topic string) []func(Event) {
 	var acc []func(Event)
-	e.middlewares.Range(func(patternRaw, middlewaresRaw interface{}) bool {
+	e.middlewares.Range(func(patternRaw, middlewaresRaw any) bool {
 		pattern := patternRaw.(string)
 		middlewares := middlewaresRaw.([]func(Event))
 		if ok, _ := path.Match(pattern, topic); ok {
@@ -238,7 +229,7 @@ func applyMiddlewares(e Event, fns []func(Event)) {
 func (e *Emitter) matched(topic string) ([]string, error) {
 	acc := make([]string, 0)
 	var err error
-	e.listMans.Range(func(topicRaw, _ interface{}) bool {
+	e.listMans.Range(func(topicRaw, _ any) bool {
 		curTopic := topicRaw.(string)
 		var matched bool
 		matched, err = path.Match(topic, curTopic)
@@ -257,10 +248,18 @@ func (e *Emitter) matched(topic string) ([]string, error) {
 	return acc, err
 }
 
+func isEmptySyncMap(sm *sync.Map) bool {
+	isEmpty := true
+	sm.Range(func(_, _ any) bool {
+		isEmpty = false
+		return false
+	})
+	return isEmpty
+}
+
 func dropAll(smListeners *sync.Map) {
-	smListeners.Range(func(key, value interface{}) bool {
-		listMan := value.(*listenerManager)
-		close(listMan.ch)
+	smListeners.Range(func(key, value any) bool {
+		value.(*listenerManager).stop()
 		smListeners.Delete(key)
 		return true
 	})
@@ -274,49 +273,9 @@ func dropMany(smListeners *sync.Map, listeners ...Listener) {
 
 func drop(smListeners *sync.Map, listener Listener) {
 	ptrAddr := fmt.Sprintf("%p", listener)
-	lmRaw, ok := smListeners.Load(ptrAddr)
+	lmRaw, ok := smListeners.LoadAndDelete(ptrAddr)
 	if !ok {
 		return
 	}
-	listMan := lmRaw.(*listenerManager)
-	close(listMan.ch)
-	smListeners.Delete(ptrAddr)
-}
-
-func send(
-	done chan struct{},
-	ch chan Event,
-	e Event, wait bool,
-) (sent, canceled bool) {
-
-	defer func() {
-		if r := recover(); r != nil {
-			canceled = false
-			sent = false
-		}
-	}()
-
-	if !wait {
-		select {
-		case <-done:
-			break
-		case ch <- e:
-			sent = true
-			return
-		default:
-			return
-		}
-
-	} else {
-		select {
-		case <-done:
-			break
-		case ch <- e:
-			sent = true
-			return
-		}
-
-	}
-	canceled = true
-	return
+	lmRaw.(*listenerManager).stop()
 }
