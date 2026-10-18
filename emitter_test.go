@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestFlatBasic(t *testing.T) {
@@ -32,7 +33,7 @@ func TestFlatOf(t *testing.T) {
 		mu.Unlock()
 		expect(t, e.Topic(), "test")
 		if e.TypedSubject() != "toto" && e.TypedSubject() != "titi" {
-			t.Errorf("Expected %v (type %v) - Got %v (type %v)", "elem", reflect.TypeOf("elem"), e.Subject(), reflect.TypeOf(e.Subject()))
+			t.Errorf("Expected %v (type %v) - Got %v (type %v)", "elem", reflect.TypeFor[string](), e.Subject(), reflect.TypeOf(e.Subject()))
 		}
 	}))
 
@@ -132,7 +133,43 @@ func TestBackwardPattern(t *testing.T) {
 	<-ch
 }
 
-func expect(t *testing.T, a interface{}, b interface{}, messages ...any) {
+func TestOnceDeliveredOnlyOnce(t *testing.T) {
+	ee := New(10)
+	got := make(chan any, 10)
+	ee.Once("test", ListenerFunc(func(e Event) {
+		got <- e.Subject()
+	}))
+
+	first := ee.Emit(NewEvent("test", 1))
+	second := ee.Emit(NewEvent("test", 2))
+	<-first
+	<-second
+
+	<-got
+	select {
+	case subject := <-got:
+		t.Errorf("Once listener received a second event: %v", subject)
+	case <-time.After(50 * time.Millisecond):
+	}
+	expect(t, len(ee.Listeners("test")), 0, "listeners count after once")
+}
+
+func TestOffWhileDelivering(t *testing.T) {
+	ee := New(0)
+	listener := ListenerFunc(func(e Event) {})
+	ee.On("test", listener)
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() {
+			<-ee.Emit(NewEvent("test", nil))
+		})
+	}
+	ee.Off("test", listener)
+	wg.Wait()
+}
+
+func expect(t *testing.T, a any, b any, messages ...any) {
 	msg := fmt.Sprint(messages...)
 	if a != b {
 		t.Errorf("Expected %v (type %v) - Got %v (type %v) (msg: %s)", b, reflect.TypeOf(b), a, reflect.TypeOf(a), msg)
@@ -141,7 +178,7 @@ func expect(t *testing.T, a interface{}, b interface{}, messages ...any) {
 
 func sizeSyncMap(syncMap *sync.Map) int {
 	var count int
-	syncMap.Range(func(_, _ interface{}) bool {
+	syncMap.Range(func(_, _ any) bool {
 		count++
 		return true
 	})

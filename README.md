@@ -60,7 +60,7 @@ Example:
 ```go
 e.Once("*", emitter.ListenerFunc(func(event emitter.Event) {
     fmt.Println(event.Topic())
-    fmt.Println(event.Subject()) // show 42 and after 37
+    fmt.Println(event.Subject()) // shows 42 only: a Once listener receives a single event
 }))
 e.Emit(emitter.NewEvent("something:special", 42))
 e.Emit(emitter.NewEvent("*", 37))
